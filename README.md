@@ -14,7 +14,7 @@ install **Ember** via the PKGBUILD:
 
 
 ```bash
-git clone https://github.com/xkikiyaa/ember.git
+git clone https://github.com/syuvi211/ember.git
 cd ember/
 makepkg -si
 ```
