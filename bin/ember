@@ -24,7 +24,7 @@ require 'set'
 require 'shellwords'
 
 module Ember
-  VERSION   = '2.7-1'
+  VERSION   = '2.8-1'
   CACHE     = File.join(ENV['XDG_CACHE_HOME'] || File.join(Dir.home, '.cache'), 'ember')
   PKG_DIR   = File.join(CACHE, 'pkg')    # built AUR packages
   BUILD_DIR = File.join(CACHE, 'build')  # AUR git clones + downloaded sources
@@ -32,6 +32,10 @@ module Ember
   PACMAN_CACHE = '/var/cache/pacman/pkg'
 
   class Error < StandardError; end
+
+  class << self
+    attr_accessor :verbose
+  end
 
   # UI 
   module UI
@@ -208,6 +212,14 @@ module Ember
     def ok?(*cmd) = capture(*cmd)[1]
     def out(*cmd) = capture(*cmd)[0]
     def run(*cmd) = system(*cmd) ? true : false
+
+    def su = @su ||= %w[syca sudo doas].find { |b| which(b) } || raise(Error, 'sudo, doas or syca is required')
+    def su_n(*cmd) = su == 'syca' ? [su, *cmd] : [su, '-n', *cmd]
+
+    def su_auth(quiet: false)
+      cmd = su == 'sudo' ? [su, '-v'] : [su, 'true']
+      quiet ? su_n(*cmd.drop(1)) : cmd
+    end
 
     def which(bin)
       ENV['PATH'].to_s.split(':').any? { |d| File.executable?(File.join(d, bin)) }
@@ -456,7 +468,7 @@ module Ember
     def initialize(title)
       @title = title
       @items = []
-      @tty = $stdout.tty?
+      @tty = $stdout.tty? && !Ember.verbose
       @drawn = 0
       @tick = 0
       @paused = false
@@ -567,13 +579,14 @@ module Ember
   # CLI 
   class CLI
     def initialize(argv)
-      @opts = { yes: false, keep: false, review: false, help: false, version: false, query: false }
+      @opts = { yes: false, keep: false, review: false, verbose: false, help: false, version: false, query: false }
       @rest = []
       argv.each do |a|
         case a
         when '-y', '--yes', '--assume-yes', '--noconfirm' then @opts[:yes] = true
         when '--keep-deps'                                then @opts[:keep] = true
         when '--review'                                   then @opts[:review] = true
+        when '--verbose'                                  then @opts[:verbose] = true
         when '-h', '--help'                               then @opts[:help] = true
         when '-v', '--version'                            then @opts[:version] = true
         when '-Q', 'list'                                 then @opts[:query] = true
@@ -587,7 +600,8 @@ module Ember
       return puts("ember #{VERSION}") if @opts[:version]
       return query_packages(@rest) if @opts[:query]
 
-      raise Error, 'Do not run ember as root — it calls sudo when it needs to.' if Process.uid.zero?
+      Ember.verbose = @opts[:verbose]
+      raise Error, "Do not run ember as root — it calls #{Sh.su} when it needs to." if Process.uid.zero?
 
       cmd, *args = @rest
       case cmd
@@ -637,6 +651,7 @@ module Ember
           -y, --yes          Assume yes at every prompt
           --keep-deps        Keep AUR build dependencies after building
           --review           Read each PKGBUILD in your pager before anything is built
+          --verbose          Show the full build and install output as it happens
           -h, --help         Show this help
           -v, --version      Show the version
       TXT
@@ -650,16 +665,21 @@ module Ember
       UI.confirm(question, assume: @opts[:yes])
     end
 
-    def sudo(*cmd) = Sh.run('sudo', *cmd)
+    def su(*cmd) = Sh.run(Sh.su, *cmd)
 
     def auth!
       return if @keepalive
 
-      Sh.run('sudo', '-v') or raise Error, 'sudo authentication failed'
+      Sh.run(*Sh.su_auth) or raise Error, "#{Sh.su} authentication failed"
+      quiet = { out: File::NULL, err: File::NULL }
+      if Sh.su == 'doas' && !system(*Sh.su_auth(quiet: true), **quiet)
+        raise Error, "doas needs 'persist' in /etc/doas.conf"
+      end
+
       @keepalive = Thread.new do
         loop do
           sleep 50
-          system('sudo', '-n', '-v', out: File::NULL, err: File::NULL)
+          system(*Sh.su_auth(quiet: true), **quiet) unless Sh.su == 'syca'
         end
       end
     end
@@ -768,7 +788,7 @@ module Ember
       progress.start
       begin
         rows.each { |r| progress.set(r, :active, 'installing') }
-        ok, log = logged('local-install', ['sudo', '-n', 'pacman', '-U', '--noconfirm', *@ask, *files],
+        ok, log = logged('local-install', Sh.su_n('pacman', '-U', '--noconfirm', *@ask, *files),
                          env: MAKEPKG_ENV) do |line|
           ph = pacman_phase(line)
           rows.each { |r| progress.set(r, :active, ph) } if ph
@@ -788,7 +808,7 @@ module Ember
     def upgrade
       auth!
       UI.step 'Refreshing package databases'
-      Sh.run('sudo', 'pacman', '-Sy') or raise Error, 'Could not refresh the package databases'
+      su('pacman', '-Sy') or raise Error, 'Could not refresh the package databases'
 
       repo_up, resolved = UI.spin('Calculating upgrades') { repo_upgrades }
       aur_old = {}
@@ -934,7 +954,7 @@ module Ember
     def execute(planner:, nodes:, repo_up:)
       unless repo_up.empty?
         UI.step 'Upgrading system packages'
-        sudo('pacman', '-Su', '--noconfirm', *@ask) or raise Error, 'System upgrade failed'
+        su('pacman', '-Su', '--noconfirm', *@ask) or raise Error, 'System upgrade failed'
       end
 
       # With AUR builds in the mix, repo packages nobody needs for building
@@ -946,10 +966,10 @@ module Ember
       unless early_targets.empty? && planner.repo_runtime.empty?
         UI.step 'Installing repository packages'
         unless early_targets.empty?
-          sudo('pacman', '-S', '--needed', '--noconfirm', *@ask, *early_targets) or raise Error, 'pacman failed'
+          su('pacman', '-S', '--needed', '--noconfirm', *@ask, *early_targets) or raise Error, 'pacman failed'
         end
         unless planner.repo_runtime.empty?
-          sudo('pacman', '-S', '--needed', '--noconfirm', *@ask, '--asdeps', *planner.repo_runtime) or
+          su('pacman', '-S', '--needed', '--noconfirm', *@ask, '--asdeps', *planner.repo_runtime) or
             raise Error, 'pacman failed'
         end
       end
@@ -1081,7 +1101,7 @@ module Ember
     end
 
     def pacman_logged(name, args, row, progress)
-      logged(name, ['sudo', '-n', 'pacman', *args], env: MAKEPKG_ENV) do |line|
+      logged(name, Sh.su_n('pacman', *args), env: MAKEPKG_ENV) do |line|
         ph = pacman_phase(line)
         progress.set(row, :active, ph) if ph
       end
@@ -1110,6 +1130,7 @@ module Ember
           stdin.close
           out.each_line do |line|
             f.write(line)
+            print line if Ember.verbose
             yield line if block_given?
           end
           ok = wait.value.success?
@@ -1129,7 +1150,7 @@ module Ember
       progress.set(row, :failed, 'failed') if row
       progress.stop
       tail = (File.readlines(log).last(25).join rescue '')
-      $stderr.puts("\n#{UI.dim(tail)}") unless tail.empty?
+      $stderr.puts("\n#{UI.dim(tail)}") unless tail.empty? || Ember.verbose
       raise Error, "#{msg} — full log: #{log.sub(Dir.home, '~')}"
     end
 
@@ -1208,7 +1229,7 @@ module Ember
       end
       return [] if removable.empty?
 
-      ok, = logged('cleanup', ['sudo', '-n', 'pacman', '-Rns', '--noconfirm', *removable])
+      ok, = logged('cleanup', Sh.su_n('pacman', '-Rns', '--noconfirm', *removable))
       ok ? removable : nil
     end
 
@@ -1244,7 +1265,7 @@ module Ember
 
       auth!
       UI.step 'Removing packages'
-      sudo('pacman', purge ? '-Rn' : '-R', '--noconfirm', *targets) or raise Error, 'pacman failed'
+      su('pacman', purge ? '-Rn' : '-R', '--noconfirm', *targets) or raise Error, 'pacman failed'
 
       unless extras.empty?
         puts
@@ -1253,7 +1274,7 @@ module Ember
         word = extras.size == 1 ? 'dependency' : 'dependencies'
         if confirm("Also remove #{extras.size} unused #{word} (#{UI.human(size.call(extras))})?")
           UI.step 'Removing unused dependencies'
-          sudo('pacman', purge ? '-Rns' : '-Rs', '--noconfirm', *extras) or
+          su('pacman', purge ? '-Rns' : '-Rs', '--noconfirm', *extras) or
             UI.warn('Could not remove some dependencies')
         else
           UI.note("Kept #{extras.size} unused #{word}.")
@@ -1371,7 +1392,7 @@ module Ember
         Dir.children(dir).each { |c| FileUtils.rm_rf(File.join(dir, c)) }
       end
       UI.step 'Cleaning the pacman cache'
-      Sh.run('sh', '-c', 'yes | sudo pacman -Scc >/dev/null') or UI.warn('pacman could not clean its cache')
+      Sh.run('sh', '-c', "yes | #{Sh.su} pacman -Scc >/dev/null") or UI.warn('pacman could not clean its cache')
       UI.ok('Caches cleaned.')
     end
   end
