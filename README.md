@@ -6,6 +6,8 @@
 
 **Ember** is a minimal AUR helper written in Ruby. It allows you to easily install, update, search, and remove AUR packages with a simple command-line interface.
 
+![Ember Preview](preview/preview2.png)
+
 ## Installation
 
 install **Ember** via the PKGBUILD:
@@ -25,6 +27,8 @@ This will build and install Ember
 ## Usage
 
 Once installed, you can use emb to manage AUR packages.
+
+![Ember Preview](preview/preview1.png)
 
 Update system packages
 ```bash
