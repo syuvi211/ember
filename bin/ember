@@ -550,14 +550,14 @@ module Ember
 
       cmd, *args = @rest
       case cmd
-      when nil, 'update', 'upgrade', 'u'       then upgrade
-      when 'install', 'ins', 'add'             then install(args)
-      when 'remove', 'rm', 'uninstall', 'del'  then remove(args, purge: false)
-      when 'purge'                             then remove(args, purge: true)
-      when 'search', 's', 'find'               then search(args)
-      when 'clean'                             then clean
-      when 'help'                              then usage
-      when 'version'                           then puts("ember #{VERSION}")
+      when nil, 'update', 'upgrade', '-Syu'             then upgrade
+      when 'install', 'ins', 'add', '-S'                then install(args)
+      when 'remove', 'rm', 'uninstall', 'del' '-R'      then remove(args, purge: false)
+      when 'purge'                                      then remove(args, purge: true)
+      when 'search', 's', 'find'                        then search(args)
+      when 'clean'                                      then clean
+      when 'help'                                       then usage
+      when 'version'                                    then puts("ember #{VERSION}")
       else
         UI.err("Unknown command '#{cmd}'")
         usage

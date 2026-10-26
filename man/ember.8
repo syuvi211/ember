@@ -102,7 +102,7 @@ If that confirmation is declined, nothing from the final batch is installed.
 The built packages stay in the cache, so the next run does not rebuild them.
 .SH COMMANDS
 .TP
-.BR "(none)" ", " update ", " upgrade ", " u
+.BR "(none)" ", " update ", " upgrade ", " -Syu
 Refresh the package databases with
 .BR "pacman \-Sy" ,
 then upgrade all repository packages and all installed AUR packages whose
@@ -110,12 +110,12 @@ version in the AUR is newer, according to
 .BR vercmp (8).
 Repository and AUR upgrades are shown in one table and confirmed together.
 .TP
-.BR install ", " ins ", " add " " \fIpackage\fR " ..."
+.BR install ", " ins ", " add ", " -S " " \fIpackage\fR " ..."
 Install packages from the repositories or the AUR.
 Packages that are already installed are skipped.
 If a name cannot be found in either place, nothing is installed.
 .TP
-.BR remove ", " rm ", " uninstall ", " del " " \fIpackage\fR " ..."
+.BR remove ", " rm ", " uninstall ", " del ", " -R " " \fIpackage\fR " ..."
 Remove packages.
 Afterwards the dependencies that became unused are listed and a separate
 question asks whether they should be removed as well.
