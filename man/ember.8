@@ -1,4 +1,4 @@
-.TH EMBER 8 "October 26, 2026" "ember 2.6-1" "Ember Manual"
+.TH EMBER 8 "October 26, 2026" "ember 2.7-1" "Ember Manual"
 .SH NAME
 ember \- AUR helper and pacman wrapper for Arch Linux
 .SH SYNOPSIS
@@ -11,6 +11,11 @@ ember \- AUR helper and pacman wrapper for Arch Linux
 .RI [ options ]
 .B install
 .IR package " ..."
+.br
+.B ember
+.RI [ options ]
+.B local
+.IR package
 .br
 .B ember
 .RI [ options ]
@@ -117,6 +122,9 @@ Repository and AUR upgrades are shown in one table and confirmed together.
 Install packages from the repositories or the AUR.
 Packages that are already installed are skipped.
 If a name cannot be found in either place, nothing is installed.
+.TP
+.BR local ", " -U ", " \fIpackage\fR ""
+Install local packages from a downloaded file.
 .TP
 .BR remove ", " rm ", " uninstall ", " del ", " -R " " \fIpackage\fR " ..."
 Remove packages.

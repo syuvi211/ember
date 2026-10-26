@@ -3,12 +3,13 @@
 
 # ember — an AUR helper and pacman wrapper 
 
-#   ember                  update system + AUR packages
-#   ember install <pkg...> install from the repos or the AUR
-#   ember remove  <pkg...> remove packages and unused dependencies
-#   ember search  <pkg...> search repos and the AUR
-#   ember clean            empty the caches
-#   ember list             lists installed packages
+#   ember                    update system + AUR packages
+#   ember install <pkg...>   install from the repos or the AUR
+#   ember local   <file...>  install local package files (*.pkg.tar.*)
+#   ember remove  <pkg...>   remove packages and unused dependencies
+#   ember search  <pkg...>   search repos and the AUR
+#   ember clean              empty the caches
+#   ember list               lists installed packages
 
 # emb works as a shorthand (symlink it to ember)
 # Only the Ruby standard library is used
@@ -23,7 +24,7 @@ require 'set'
 require 'shellwords'
 
 module Ember
-  VERSION   = '2.6-1'
+  VERSION   = '2.7-1'
   CACHE     = File.join(ENV['XDG_CACHE_HOME'] || File.join(Dir.home, '.cache'), 'ember')
   PKG_DIR   = File.join(CACHE, 'pkg')    # built AUR packages
   BUILD_DIR = File.join(CACHE, 'build')  # AUR git clones + downloaded sources
@@ -221,7 +222,7 @@ module Ember
   module Pac
     module_function
 
-    # Parse `pacman -Si/-Qi` output into { name => { 'Field' => 'value' } }
+    # Parse 'pacman -Si/-Qi' output into { name => { 'Field' => 'value' } }
     def info(flag, names)
       return {} if names.empty?
 
@@ -258,7 +259,7 @@ module Ember
       @repo.fetch(name) { @repo[name] = Sh.ok?('pacman', '-Sp', '--noconfirm', *ASK_CONFLICTS, name) }
     end
 
-    # `foo>=1.0` -> `foo`
+    # 'foo>=1.0' -> 'foo'
     def dep_name(dep) = dep.to_s[/\A[^<>=]+/].to_s
 
     # Split a pacman Provides / Conflicts With field into its entries
@@ -268,7 +269,7 @@ module Ember
     end
 
     # Checks both directions: incoming conflicts with an installed package, and
-    # an installed package that declares a conflict with something incoming
+    # an installed package that declares a conflict with something incoming.
     def conflicts(incoming)
       return {} if incoming.empty?
 
@@ -592,6 +593,7 @@ module Ember
       case cmd
       when nil, 'update', 'upgrade', '-Syu'             then upgrade
       when 'install', 'ins', 'add', '-S'                then install(args)
+      when 'local', '-U'                                then install_local(args)
       when 'remove', 'rm', 'uninstall', 'del', '-R'     then remove(args, purge: false)
       when 'purge'                                      then remove(args, purge: true)
       when 'search', 's', 'find'                        then search(args)
@@ -624,6 +626,7 @@ module Ember
         #{UI.bold('Commands:')}
           #{UI.ember('(none)')}, update      Update the system and all AUR packages
           #{UI.ember('install')}, ins        Install packages from the repos or the AUR
+          #{UI.ember('local')}, -U           Install local package files (*.pkg.tar.*)
           #{UI.ember('remove')}, rm          Remove packages and unused dependencies
           #{UI.ember('purge')}               Like remove, but also drops config backups
           #{UI.ember('search')}, s           Search the repos and the AUR
@@ -672,6 +675,113 @@ module Ember
                      "#{planner.missing.join(', ')} in the repos or the AUR"
       end
       transact(planner: planner)
+    end
+
+    # install local package files 
+    def install_local(args)
+      raise Error, 'Nothing to install. Usage: ember -U <file.pkg.tar.zst…>' if args.empty?
+
+      files = args.map { |a| File.expand_path(a) }.uniq
+      files.each do |f|
+        raise Error, "#{f.sub(Dir.home, '~')}: no such file" unless File.file?(f)
+        raise Error, "#{File.basename(f)}: not a package file (*.pkg.tar.*)" unless f.match?(/\.pkg\.tar(\.\w+)?\z/)
+      end
+
+      info = nil
+      deps = nil
+      removals = nil
+      UI.spin('Reading packages') do
+        _, ok, err = Sh.capture('pacman', '-Qip', *files)
+        unless ok
+          msg = Sh.clean_errors(err)
+          raise Error, msg.empty? ? 'Could not read the package files' : msg
+        end
+
+        info = Pac.info('-Qip', files)
+        # everything pacman would pull in from the repos for these files
+        out, ok, err = Sh.capture('pacman', '-U', '--print', '--print-format', '%n', '--noconfirm',
+                                  *Pac::ASK_CONFLICTS, *files)
+        raise Error, Sh.clean_errors(err) unless ok
+
+        deps = out.lines.map(&:strip).reject(&:empty?) - info.keys
+        incoming = info.transform_values do |h|
+          { conflicts: Pac.split_deps(h['Conflicts With']), provides: Pac.split_deps(h['Provides']) }
+        end
+        removals = Pac.conflicts(incoming)
+      end
+      raise Error, 'Could not read the package files' if info.nil? || info.empty?
+
+      @ask = removals.empty? ? [] : Pac::ASK_CONFLICTS
+      old      = Pac.info('-Qi', info.keys)
+      dep_info = Pac.info('-Si', deps)
+      size_of  = ->(name) { UI.human(File.size(files[info.keys.index(name)])) }
+      ver      = ->(name) { info[name]['Version'] }
+
+      fresh = info.keys.reject { |n| old.key?(n) }
+      same  = info.keys.select { |n| old.key?(n) && old[n]['Version'] == ver.call(n) }
+      up    = info.keys - fresh - same
+      sections = [
+        { title: 'Installing:', color: UI::GREEN,
+          rows: fresh.map { |n| UI::Row.new(n, ver.call(n), size_of.call(n)) } },
+        { title: 'Upgrading:', color: UI::CYAN,
+          rows: up.map { |n| UI::Row.new(n, "#{old[n]['Version']} → #{ver.call(n)}", size_of.call(n)) } },
+        { title: 'Reinstalling:', color: UI::CYAN,
+          rows: same.map { |n| UI::Row.new(n, ver.call(n), size_of.call(n)) } },
+        { title: 'Dependencies (from the repos):', color: UI::AMBER,
+          rows: deps.map do |n|
+            UI::Row.new(n, dep_info.dig(n, 'Version'), UI.human(Pac.bytes(dep_info.dig(n, 'Download Size'))))
+          end },
+        { title: 'Removing (conflicting):', color: UI::RED,
+          rows: removals.map { |n, r| UI::Row.new(n, r[:ver], UI.human(r[:size])) } }
+      ].reject { |sec| sec[:rows].empty? }
+
+      n_inst = fresh.size + deps.size
+      lines = []
+      lines << ['Install', n_inst, deps.empty? ? nil : "#{deps.size} from the repos"] if n_inst.positive?
+      lines << ['Upgrade', up.size, nil] if up.any?
+      lines << ['Reinstall', same.size, nil] if same.any?
+      unless removals.empty?
+        lines << ['Remove', removals.size, "conflicts with #{removals.values.map { |r| r[:by] }.uniq.join(', ')}"]
+      end
+
+      dl = deps.sum { |n| Pac.bytes(dep_info.dig(n, 'Download Size')) }
+      disk = info.keys.sum { |n| Pac.bytes(info[n]['Installed Size']) - Pac.bytes(old.dig(n, 'Installed Size')) } +
+             deps.sum { |n| Pac.bytes(dep_info.dig(n, 'Installed Size')) } -
+             removals.values.sum { |r| r[:size] }
+      stats = []
+      stats << ['Total download size:', UI.human(dl)] if dl.positive?
+      stats << ['Disk space required:', UI.human(disk)] if disk.positive?
+      stats << ['Disk space freed:', UI.human(-disk)] if disk.negative?
+      stats << ['Local packages:', 'installed from file']
+
+      puts
+      UI.table(sections)
+      UI.summary(lines, stats)
+
+      go = removals.empty? ? confirm : UI.confirm('Remove the conflicting packages and continue?')
+      return UI.note('Aborted.') unless go
+
+      auth!
+      puts
+      progress = Progress.new('Installing local packages')
+      rows = info.keys.map { |n| progress.add(n, ver.call(n)) }
+      progress.start
+      begin
+        rows.each { |r| progress.set(r, :active, 'installing') }
+        ok, log = logged('local-install', ['sudo', '-n', 'pacman', '-U', '--noconfirm', *@ask, *files],
+                         env: MAKEPKG_ENV) do |line|
+          ph = pacman_phase(line)
+          rows.each { |r| progress.set(r, :active, ph) } if ph
+        end
+        unless ok
+          rows.each { |r| progress.set(r, :failed, 'failed') }
+          fail_with(progress, nil, 'Could not install the packages', log)
+        end
+        rows.each { |r| progress.set(r, :done, 'installed') }
+      ensure
+        progress.stop
+      end
+      UI.ok('Done.')
     end
 
     # upgrade 
@@ -917,7 +1027,7 @@ module Ember
 
         if clean_row
           progress.set(clean_row, :active, 'removing build dependencies')
-          
+
           removed = (remove_build_deps(added | build_only) rescue nil)
           if removed
             progress.set(clean_row, :done, removed.empty? ? 'nothing to remove' : "removed #{removed.size} #{removed.size == 1 ? 'package' : 'packages'}")
