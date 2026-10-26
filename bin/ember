@@ -23,7 +23,7 @@ require 'set'
 require 'shellwords'
 
 module Ember
-  VERSION   = '2.4-1'
+  VERSION   = '2.5-1'
   CACHE     = File.join(ENV['XDG_CACHE_HOME'] || File.join(Dir.home, '.cache'), 'ember')
   PKG_DIR   = File.join(CACHE, 'pkg')    # built AUR packages
   BUILD_DIR = File.join(CACHE, 'build')  # AUR git clones + downloaded sources
@@ -591,6 +591,7 @@ module Ember
           #{UI.ember('purge')}               Like remove, but also drops config backups
           #{UI.ember('search')}, s           Search the repos and the AUR
           #{UI.ember('clean')}               Empty ember's cache (and pacman's)
+          #{UI.ember('list')}                Creates a list of all installed packages
 
         #{UI.bold('Options:')}
           -y, --yes          Assume yes at every prompt
