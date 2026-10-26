@@ -4,10 +4,11 @@
 # ember — an AUR helper and pacman wrapper 
 
 #   ember                  update system + AUR packages
-#   ember install <pkg...>   install from the repos or the AUR
-#   ember remove  <pkg...>   remove packages and unused dependencies
-#   ember search  <pkg...>  search repos and the AUR
+#   ember install <pkg...> install from the repos or the AUR
+#   ember remove  <pkg...> remove packages and unused dependencies
+#   ember search  <pkg...> search repos and the AUR
 #   ember clean            empty the caches
+#   ember list             lists installed packages
 
 # emb works as a shorthand (symlink it to ember)
 # Only the Ruby standard library is used
@@ -22,7 +23,7 @@ require 'set'
 require 'shellwords'
 
 module Ember
-  VERSION   = '2.0.0'
+  VERSION   = '2.0.3'
   CACHE     = File.join(ENV['XDG_CACHE_HOME'] || File.join(Dir.home, '.cache'), 'ember')
   PKG_DIR   = File.join(CACHE, 'pkg')    # built AUR packages
   BUILD_DIR = File.join(CACHE, 'build')  # AUR git clones + downloaded sources
@@ -528,7 +529,7 @@ module Ember
   # CLI 
   class CLI
     def initialize(argv)
-      @opts = { yes: false, keep: false, review: false, help: false, version: false }
+      @opts = { yes: false, keep: false, review: false, help: false, version: false, query: false }
       @rest = []
       argv.each do |a|
         case a
@@ -537,6 +538,7 @@ module Ember
         when '--review'                                   then @opts[:review] = true
         when '-h', '--help'                               then @opts[:help] = true
         when '-v', '--version'                            then @opts[:version] = true
+        when '-Q', 'list'                                 then @opts[:query] = true
         else @rest << a
         end
       end
@@ -545,6 +547,7 @@ module Ember
     def run
       return usage if @opts[:help]
       return puts("ember #{VERSION}") if @opts[:version]
+      return query_packages(@rest) if @opts[:query]
 
       raise Error, 'Do not run ember as root — it calls sudo when it needs to.' if Process.uid.zero?
 
@@ -552,7 +555,7 @@ module Ember
       case cmd
       when nil, 'update', 'upgrade', '-Syu'             then upgrade
       when 'install', 'ins', 'add', '-S'                then install(args)
-      when 'remove', 'rm', 'uninstall', 'del' '-R'      then remove(args, purge: false)
+      when 'remove', 'rm', 'uninstall', 'del', '-R'     then remove(args, purge: false)
       when 'purge'                                      then remove(args, purge: true)
       when 'search', 's', 'find'                        then search(args)
       when 'clean'                                      then clean
@@ -596,6 +599,10 @@ module Ember
           -h, --help         Show this help
           -v, --version      Show the version
       TXT
+    end
+
+    def query_packages(args)
+      exec('pacman', '-Q', *args)
     end
 
     def confirm(question = 'Do you want to continue?')

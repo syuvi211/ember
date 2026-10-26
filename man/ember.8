@@ -1,4 +1,4 @@
-.TH EMBER 8 "October 26, 2026" "ember 1.2.1" "Ember Manual"
+.TH EMBER 8 "October 26, 2026" "ember 1.2.3" "Ember Manual"
 .SH NAME
 ember \- AUR helper and pacman wrapper for Arch Linux
 .SH SYNOPSIS
@@ -23,6 +23,9 @@ ember \- AUR helper and pacman wrapper for Arch Linux
 .br
 .B ember
 .B clean
+.br
+.B ember
+.B list
 .br
 .B ember
 .BR \-h " | " \-v
@@ -141,6 +144,9 @@ Show the size of every cache and, after confirmation, empty them.
 This covers the built AUR packages, the AUR sources, the build logs and the
 package cache of
 .BR pacman (8).
+.TP
+.B list, -Q
+Creates a list of all installed packages. Can be used to search for installed packages.
 .TP
 .B help
 Show a short usage summary.

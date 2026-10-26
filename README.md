@@ -63,6 +63,11 @@ Search for AUR packages
 ember search <package>
 ```
 
+List installed packages
+```bash
+ember list
+```
+
 Show help
 ```bash
 ember --help
