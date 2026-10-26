@@ -28,7 +28,7 @@ Once installed, you can use emb to manage AUR packages.
 
 Update system packages
 ```bash
-emb
+ember
 ```
 
 
@@ -36,25 +36,41 @@ emb
 
 Install an AUR package
 ```bash
-emb ins <package_name>
+ember install <package_name>
 ```
 
 
 Remove an installed package
 ```bash
-emb rm <package_name>
+ember remove <package_name>
+```
+
+Clean the cache
+```bash
+ember clean
+```
+Remove an installed package + config
+```bash
+ember purge <package_name>
 ```
 
 Search for AUR packages
 ```bash
-emb search <package>
+ember search <package>
 ```
 
-Ember uses a temporary folder to clone and build AUR packages:
+Show help
 ```bash
-~/.ember/tmp/
+ember --help
 ```
-This folder is automatically cleaned after installation
+
+You can also use "emb" instead of "ember"
+
+Ember uses a folder to clone and build AUR packages:
+```bash
+~/.cache/ember/
+```
+
 
 
 
