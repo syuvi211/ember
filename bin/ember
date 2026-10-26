@@ -247,18 +247,54 @@ module Ember
       m[1].to_f * (1024**%w[B KiB MiB GiB TiB].index(m[2]))
     end
 
+    ASK_CONFLICTS = ['--ask', '4'].freeze
+
     def installed = Sh.out('pacman', '-Qq').split.to_set
     def installed?(name) = Sh.ok?('pacman', '-Qq', name)
     def satisfied?(dep) = Sh.ok?('pacman', '-T', dep)
 
     def repo?(name)
       @repo ||= {}
-      @repo.fetch(name) { @repo[name] = Sh.ok?('pacman', '-Sp', '--noconfirm', name) }
+      @repo.fetch(name) { @repo[name] = Sh.ok?('pacman', '-Sp', '--noconfirm', *ASK_CONFLICTS, name) }
+    end
+
+    # `foo>=1.0` -> `foo`
+    def dep_name(dep) = dep.to_s[/\A[^<>=]+/].to_s
+
+    # Split a pacman Provides / Conflicts With field into its entries
+    def split_deps(field)
+      f = field.to_s.strip
+      f.empty? || f == 'None' ? [] : f.split(/\s+/)
+    end
+
+    # Checks both directions: incoming conflicts with an installed package, and
+    # an installed package that declares a conflict with something incoming
+    def conflicts(incoming)
+      return {} if incoming.empty?
+
+      hits = {}
+      info('-Qi', installed.to_a).each do |name, h|
+        next if incoming.key?(name) # being upgraded / replaced anyway
+
+        have   = [name, *split_deps(h['Provides']).map { |d| dep_name(d) }]
+        theirs = split_deps(h['Conflicts With'])
+        incoming.each do |pkg, i|
+          mine = [pkg, *i[:provides].map { |d| dep_name(d) }]
+          forward = i[:conflicts].any? do |c|
+            have.include?(dep_name(c)) && (c.match?(/[<>=]/) ? satisfied?(c) : true)
+          end
+          reverse = theirs.any? { |c| !c.match?(/[<>=]/) && mine.include?(c) }
+          next unless forward || reverse
+
+          hits[name] ||= { by: pkg, ver: h['Version'], size: bytes(h['Installed Size']) }
+        end
+      end
+      hits
     end
 
     # Names of everything pacman would install for these targets (deps included)
     def plan(names)
-      out, ok, err = Sh.capture('pacman', '-Sp', '--needed', '--noconfirm', '--print-format', '%n', *names)
+      out, ok, err = Sh.capture('pacman', '-Sp', '--needed', '--noconfirm', *ASK_CONFLICTS, '--print-format', '%n', *names)
       raise Error, Sh.clean_errors(err) unless ok
 
       out.lines.map(&:strip).reject(&:empty?)
@@ -314,7 +350,7 @@ module Ember
   # dependency planner 
   class Planner
     Node = Struct.new(:name, :base, :version, :desc, :deps, :make, :explicit, :runtime,
-                      :repo_deps, :repo_make, :aur_deps, :aur_make, keyword_init: true)
+                      :repo_deps, :repo_make, :aur_deps, :aur_make, :conflicts, :provides, keyword_init: true)
 
     attr_reader :aur, :repo_targets, :repo_runtime, :repo_build, :already, :missing
 
@@ -372,7 +408,8 @@ module Ember
         n = Node.new(name: info['Name'], base: info['PackageBase'], version: info['Version'],
                      desc: info['Description'].to_s, deps: info['Depends'] || [],
                      make: (info['MakeDepends'] || []) + (info['CheckDepends'] || []),
-                     explicit: false, repo_deps: [], repo_make: [], aur_deps: [], aur_make: [])
+                     explicit: false, repo_deps: [], repo_make: [], aur_deps: [], aur_make: [],
+                     conflicts: info['Conflicts'] || [], provides: info['Provides'] || [])
         @queue << n
         n
       end)
@@ -694,6 +731,14 @@ module Ember
       sz  = ->(n) { Pac.bytes(det.dig(n, 'Installed Size')) }
       row = ->(n) { UI::Row.new(n, det.dig(n, 'Version'), UI.human(dl.call(n))) }
 
+      incoming = (fresh + repo_up.keys + build_names).uniq.to_h do |n|
+        [n, { conflicts: Pac.split_deps(det.dig(n, 'Conflicts With')),
+              provides: Pac.split_deps(det.dig(n, 'Provides')) }]
+      end
+      nodes.each { |n| incoming[n.name] = { conflicts: n.conflicts, provides: n.provides } }
+      removals = UI.spin('Checking for conflicts') { Pac.conflicts(incoming) }
+      @ask = removals.empty? ? [] : Pac::ASK_CONFLICTS
+
       aur_rt    = nodes.select(&:runtime)
       aur_new   = aur_rt.reject { |n| aur_old.key?(n.name) }
       aur_up    = aur_rt.select { |n| aur_old.key?(n.name) }
@@ -709,7 +754,9 @@ module Ember
         { title: 'Upgrading from AUR:', color: UI::CYAN,
           rows: aur_up.map { |n| UI::Row.new(n.name, "#{aur_old[n.name]} → #{n.version}", '—') } },
         { title: build_title, color: UI::AMBER,
-          rows: build_names.map(&row) + aur_build.map { |n| UI::Row.new(n.name, n.version, '—') } }
+          rows: build_names.map(&row) + aur_build.map { |n| UI::Row.new(n.name, n.version, '—') } },
+        { title: 'Removing (conflicting):', color: UI::RED,
+          rows: removals.map { |n, r| UI::Row.new(n, r[:ver], UI.human(r[:size])) } }
       ].reject { |s| s[:rows].empty? }
 
       if sections.empty?
@@ -723,13 +770,16 @@ module Ember
       total_dl = (fresh + repo_up.keys + build_names).uniq.sum(&dl)
       disk = fresh.sum(&sz) + repo_up.keys.sum { |n| sz.call(n) - Pac.bytes(old.dig(n, 'Installed Size')) }
       temp = build_names.sum(&sz)
+      disk -= removals.values.sum { |r| r[:size] }
 
       lines = []
       lines << ['Install', n_inst, n_aur.positive? && aur_new.any? ? "#{aur_new.size} from the AUR" : nil] if n_inst.positive?
       lines << ['Upgrade', n_up, aur_up.any? ? "#{aur_up.size} from the AUR" : nil] if n_up.positive?
+      lines << ['Remove', removals.size, "conflicts with #{removals.values.map { |r| r[:by] }.uniq.join(', ')}"] unless removals.empty?
       stats = []
       stats << ['Total download size:', UI.human(total_dl)] if total_dl.positive?
       stats << ['Disk space required:', UI.human(disk)] if disk.positive?
+      stats << ['Disk space freed:', UI.human(-disk)] if disk.negative?
       stats << ['Temporary build space:', UI.human(temp)] if temp.positive?
       stats << ['AUR packages:', 'built locally from source'] if n_aur.positive? || aur_build.any?
 
@@ -737,7 +787,8 @@ module Ember
       UI.table(sections)
       UI.summary(lines, stats)
 
-      unless confirm
+      go = removals.empty? ? confirm : UI.confirm('Remove the conflicting packages and continue?')
+      unless go
         UI.note('Aborted.')
         return :aborted
       end
@@ -773,7 +824,7 @@ module Ember
     def execute(planner:, nodes:, repo_up:)
       unless repo_up.empty?
         UI.step 'Upgrading system packages'
-        sudo('pacman', '-Su', '--noconfirm') or raise Error, 'System upgrade failed'
+        sudo('pacman', '-Su', '--noconfirm', *@ask) or raise Error, 'System upgrade failed'
       end
 
       # With AUR builds in the mix, repo packages nobody needs for building
@@ -785,10 +836,10 @@ module Ember
       unless early_targets.empty? && planner.repo_runtime.empty?
         UI.step 'Installing repository packages'
         unless early_targets.empty?
-          sudo('pacman', '-S', '--needed', '--noconfirm', *early_targets) or raise Error, 'pacman failed'
+          sudo('pacman', '-S', '--needed', '--noconfirm', *@ask, *early_targets) or raise Error, 'pacman failed'
         end
         unless planner.repo_runtime.empty?
-          sudo('pacman', '-S', '--needed', '--noconfirm', '--asdeps', *planner.repo_runtime) or
+          sudo('pacman', '-S', '--needed', '--noconfirm', *@ask, '--asdeps', *planner.repo_runtime) or
             raise Error, 'pacman failed'
         end
       end
@@ -819,7 +870,7 @@ module Ember
         if deps_row
           progress.set(deps_row, :active, 'installing')
           before = Pac.installed
-          ok, log = pacman_logged('build-deps', ['-S', '--needed', '--noconfirm', '--asdeps', *planner.repo_build],
+          ok, log = pacman_logged('build-deps', ['-S', '--needed', '--noconfirm', *@ask, '--asdeps', *planner.repo_build],
                                   deps_row, progress)
           fail_with(progress, deps_row, 'Could not install build dependencies', log) unless ok
           added = Pac.installed - before
@@ -851,7 +902,7 @@ module Ember
           if go
             if repo_row
               progress.set(repo_row, :active, 'installing')
-              ok, log = pacman_logged('repo-install', ['-S', '--needed', '--noconfirm', *deferred_repo],
+              ok, log = pacman_logged('repo-install', ['-S', '--needed', '--noconfirm', *@ask, *deferred_repo],
                                       repo_row, progress)
               fail_with(progress, repo_row, 'Could not install repository packages', log) unless ok
               progress.set(repo_row, :done, 'installed')
@@ -866,7 +917,8 @@ module Ember
 
         if clean_row
           progress.set(clean_row, :active, 'removing build dependencies')
-          removed = remove_build_deps(added | build_only)
+          
+          removed = (remove_build_deps(added | build_only) rescue nil)
           if removed
             progress.set(clean_row, :done, removed.empty? ? 'nothing to remove' : "removed #{removed.size} #{removed.size == 1 ? 'package' : 'packages'}")
           else
@@ -886,7 +938,7 @@ module Ember
     def install_node(node, files, built, row, progress)
       flags = node.explicit ? [] : ['--asdeps']
       progress.set(row, :active, 'installing')
-      ok, log = pacman_logged("#{node.name}-install", ['-U', '--noconfirm', *flags, *files], row, progress)
+      ok, log = pacman_logged("#{node.name}-install", ['-U', '--noconfirm', *@ask, *flags, *files], row, progress)
       fail_with(progress, row, "Could not install #{node.name}", log) unless ok
       progress.set(row, :done, built ? 'built & installed' : 'installed from cache')
     end
