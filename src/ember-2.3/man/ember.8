@@ -1,0 +1,278 @@
+.TH EMBER 8 "October 26, 2026" "ember 2.3.1" "Ember Manual"
+.SH NAME
+ember \- AUR helper and pacman wrapper for Arch Linux
+.SH SYNOPSIS
+.B ember
+.RB [ \-y ]
+.RB [ \-\-keep\-deps ]
+.RB [ \-\-review ]
+.br
+.B ember
+.RI [ options ]
+.B install
+.IR package " ..."
+.br
+.B ember
+.RI [ options ]
+.BR remove " | " purge
+.IR package " ..."
+.br
+.B ember
+.B search
+.IR term " ..."
+.br
+.B ember
+.B clean
+.br
+.B ember
+.B list
+.br
+.B ember
+.BR \-h " | " \-v
+.SH DESCRIPTION
+.B ember
+is an AUR helper with a
+.BR pacman (8)
+wrapper.
+It installs, upgrades, removes and searches packages from both the official
+repositories and the Arch User Repository (AUR) through a single interface.
+.PP
+Every transaction is first shown as a table of packages with their versions
+and sizes, followed by a summary and a
+.B [Y/n]
+question.
+Nothing is changed until the question is answered with yes.
+.PP
+The command
+.B emb
+is a shorthand for
+.B ember
+and behaves identically.
+It is a symbolic link to the same program.
+.PP
+.B ember
+must not be run as root.
+It calls
+.BR sudo (8)
+whenever it needs elevated privileges, and
+.BR makepkg (8)
+refuses to run as root anyway.
+.PP
+When
+.B ember
+is run without a command, it updates the system and all installed AUR
+packages.
+.SS Prompts
+Prompts are answered with the keyboard.
+Pressing
+.B y
+or
+.B n
+moves the highlighted letter between
+.B Y
+and
+.BR N .
+Tab, space and the left and right arrow keys toggle it as well.
+Enter confirms the highlighted choice and Ctrl-C aborts.
+.SS AUR packages
+Packages that are not found in the repositories are looked up in the AUR.
+Dependencies are resolved recursively, with runtime and build dependencies
+tracked separately.
+Dependencies available in the repositories are installed with
+.BR pacman (8),
+and the remaining ones are built from the AUR first.
+.PP
+Packages are built with
+.BR makepkg (8)
+inside the cache directory and the output is hidden.
+A live progress list shows every package together with what it is currently
+doing, such as downloading sources, compiling, packaging or installing.
+The complete output of each step is written to a log file, and the last lines
+are printed if a step fails.
+.PP
+Build dependencies that were only needed for building, and that nothing else
+on the system requires, are removed again once everything is installed.
+Use
+.B \-\-keep\-deps
+to keep them.
+.PP
+Packages that other AUR packages depend on are installed as soon as they are
+built, because they are needed for the next build.
+The remaining packages, together with any repository packages that were not
+needed for building, are collected and installed after one final confirmation
+that lists everything.
+If that confirmation is declined, nothing from the final batch is installed.
+The built packages stay in the cache, so the next run does not rebuild them.
+.SH COMMANDS
+.TP
+.BR "(none)" ", " update ", " upgrade ", " -Syu
+Refresh the package databases with
+.BR "pacman \-Sy" ,
+then upgrade all repository packages and all installed AUR packages whose
+version in the AUR is newer, according to
+.BR vercmp (8).
+Repository and AUR upgrades are shown in one table and confirmed together.
+.TP
+.BR install ", " ins ", " add ", " -S " " \fIpackage\fR " ..."
+Install packages from the repositories or the AUR.
+Packages that are already installed are skipped.
+If a name cannot be found in either place, nothing is installed.
+.TP
+.BR remove ", " rm ", " uninstall ", " del ", " -R " " \fIpackage\fR " ..."
+Remove packages.
+Afterwards the dependencies that became unused are listed and a separate
+question asks whether they should be removed as well.
+.TP
+.BR purge " " \fIpackage\fR " ..."
+Like
+.BR remove ,
+but also removes configuration backup files, as
+.B pacman \-Rn
+does.
+.TP
+.BR search ", " s ", " find " " \fIterm\fR " ..."
+Search the repositories and the AUR.
+Several terms must all match.
+Terms are treated as regular expressions where possible, and matches are
+highlighted.
+Installed packages are marked, and AUR results show their votes and whether
+they are flagged out of date.
+At most 30 AUR results are shown, ordered by votes.
+.TP
+.B clean
+Show the size of every cache and, after confirmation, empty them.
+This covers the built AUR packages, the AUR sources, the build logs and the
+package cache of
+.BR pacman (8).
+.TP
+.B list, -Q
+Creates a list of all installed packages. Can be used to search for installed packages.
+.TP
+.B help
+Show a short usage summary.
+.TP
+.B version
+Print the version.
+.SH OPTIONS
+.TP
+.BR \-y ", " \-\-yes
+Assume yes at every prompt.
+The aliases
+.B \-\-assume\-yes
+and
+.B \-\-noconfirm
+are accepted as well.
+.TP
+.B \-\-keep\-deps
+Do not remove AUR build dependencies after building.
+.TP
+.B \-\-review
+Before anything is upgraded, installed or built, open every AUR
+.I PKGBUILD
+and any
+.I *.install
+scripts in the pager and ask whether to continue.
+This also applies to packages that are already cached.
+The version that was reviewed is the version that gets built.
+This question is not skipped by
+.BR \-y .
+.TP
+.BR \-h ", " \-\-help
+Show the usage summary and exit.
+.TP
+.BR \-v ", " \-\-version
+Print the version and exit.
+.SH ENVIRONMENT
+.TP
+.B XDG_CACHE_HOME
+Base directory of the cache.
+Defaults to
+.IR ~/.cache .
+.TP
+.B PAGER
+Pager used by
+.BR \-\-review .
+Defaults to
+.BR less (1).
+.TP
+.B NO_COLOR
+If set, colours are disabled.
+Colours are also disabled when the output is not a terminal.
+.SH FILES
+.TP
+.I ~/.cache/ember/pkg/
+Built AUR packages.
+A package is reused when its version matches the one in the AUR.
+.TP
+.I ~/.cache/ember/build/
+Git clones of AUR packages and their downloaded sources.
+.TP
+.I ~/.cache/ember/logs/
+Logs of builds, installs and cleanups, one file per step.
+.TP
+.I /var/cache/pacman/pkg/
+Package cache of
+.BR pacman (8)
+for repository packages, which is also emptied by
+.BR clean .
+.SH EXAMPLES
+Update the system and all AUR packages:
+.PP
+.RS
+.nf
+$ ember
+.fi
+.RE
+.PP
+Install a repository package and an AUR package together:
+.PP
+.RS
+.nf
+$ emb ins konsole lunar-client
+.fi
+.RE
+.PP
+Read the build scripts before installing an AUR package:
+.PP
+.RS
+.nf
+$ ember install \-\-review lunar\-client
+.fi
+.RE
+.PP
+Remove a package and then choose whether to remove its dependencies:
+.PP
+.RS
+.nf
+$ ember remove konsole
+.fi
+.RE
+.PP
+Search the repositories and the AUR:
+.PP
+.RS
+.nf
+$ ember search terminal emulator
+.fi
+.RE
+.PP
+Empty all caches:
+.PP
+.RS
+.nf
+$ ember clean
+.fi
+.RE
+.SH SEE ALSO
+.BR git (1),
+.BR less (1),
+.BR PKGBUILD (5),
+.BR pacman.conf (5),
+.BR makepkg (8),
+.BR pacman (8),
+.BR sudo (8),
+.BR vercmp (8)
+.SH BUGS
+/
+.SH AUTHOR
+Written by Rachel Litjens
