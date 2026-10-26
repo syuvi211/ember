@@ -28,7 +28,7 @@ This will build and install Ember
 
 Once installed, you can use emb to manage AUR packages.
 
-![Ember Preview](preview/preview4.png)
+![Ember Preview](preview/preview5.png)
 
 Update system packages
 ```bash
