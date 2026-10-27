@@ -1,4 +1,4 @@
-[![AUR Version](https://img.shields.io/aur/version/ember?label=AUR&logo=arch-linux)](https://aur.archlinux.org/packages/ember)
+[![AUR Version](https://img.shields.io/aur/version/ember?label=AUR&logo=arch-linux&cacheSeconds=3)](https://aur.archlinux.org/packages/ember)
 [![License](https://img.shields.io/badge/license-GPLv3-brightgreen)]()
 [![Language](https://img.shields.io/badge/language-Ruby-red)]()
 
