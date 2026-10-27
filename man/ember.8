@@ -1,4 +1,4 @@
-.TH EMBER 8 "October 26, 2026" "ember 2.8-1" "Ember Manual"
+.TH EMBER 8 "October 27, 2026" "ember 2.9-1" "Ember Manual"
 .SH NAME
 ember \- AUR helper and pacman wrapper for Arch Linux
 .SH SYNOPSIS
@@ -11,6 +11,11 @@ ember \- AUR helper and pacman wrapper for Arch Linux
 .RI [ options ]
 .B install
 .IR package " ..."
+.br
+.B ember
+.RI [ options ]
+.BR \-Sy [ u ]
+.RI [ package " ..."]
 .br
 .B ember
 .RI [ options ]
@@ -110,7 +115,7 @@ If that confirmation is declined, nothing from the final batch is installed.
 The built packages stay in the cache, so the next run does not rebuild them.
 .SH COMMANDS
 .TP
-.BR "(none)" ", " update ", " upgrade ", " -Syu
+.BR "(none)" ", " update ", " upgrade
 Refresh the package databases with
 .BR "pacman \-Sy" ,
 then upgrade all repository packages and all installed AUR packages whose
@@ -118,10 +123,41 @@ version in the AUR is newer, according to
 .BR vercmp (8).
 Repository and AUR upgrades are shown in one table and confirmed together.
 .TP
-.BR install ", " ins ", " add ", " -S " " \fIpackage\fR " ..."
+.BR install ", " ins ", " add " " \fIpackage\fR " ..."
 Install packages from the repositories or the AUR.
 Packages that are already installed are skipped.
 If a name cannot be found in either place, nothing is installed.
+.TP
+.BR \-S " " \fIpackage\fR " ..."
+Same as
+.BR install .
+The package databases are not refreshed.
+.TP
+.BR \-Sy " [" \fIpackage\fR " ...]"
+Refresh the package databases with
+.BR "pacman \-Sy" .
+If packages are given they are installed afterwards, otherwise only the
+databases are refreshed.
+As with
+.BR pacman (8),
+installing packages after a refresh without upgrading can leave the system
+partially upgraded, so
+.B \-Syu
+is usually the better choice.
+.TP
+.BR \-Syu " [" \fIpackage\fR " ...]"
+Does everything
+.B update
+does and also installs the given packages.
+The upgrades and the new packages are shown in one table and confirmed
+together.
+Without packages it behaves exactly like
+.BR update .
+.TP
+.BR \-Su " [" \fIpackage\fR " ...]"
+Same as
+.BR \-Syu ,
+but the package databases are not refreshed first.
 .TP
 .BR local ", " -U ", " \fIpackage\fR ""
 Install local packages from a downloaded file.
@@ -138,7 +174,7 @@ but also removes configuration backup files, as
 .B pacman \-Rn
 does.
 .TP
-.BR search ", " s ", " find " " \fIterm\fR " ..."
+.BR search ", " find " " \fIterm\fR " ..."
 Search the repositories and the AUR.
 Several terms must all match.
 Terms are treated as regular expressions where possible, and matches are
@@ -243,6 +279,14 @@ $ emb ins konsole lunar-client
 .fi
 .RE
 .PP
+Refresh the databases, update the system and install a package in one go:
+.PP
+.RS
+.nf
+$ emb \-Syu konsole
+.fi
+.RE
+.PP
 Read the build scripts before installing an AUR package:
 .PP
 .RS
@@ -283,7 +327,5 @@ $ ember clean
 .BR pacman (8),
 .BR sudo (8),
 .BR vercmp (8)
-.SH BUGS
-/
 .SH AUTHOR
 Written by Rachel Litjens

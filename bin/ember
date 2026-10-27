@@ -1,19 +1,6 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# ember — an AUR helper and pacman wrapper 
-
-#   ember                    update system + AUR packages
-#   ember install <pkg...>   install from the repos or the AUR
-#   ember local   <file...>  install local package files (*.pkg.tar.*)
-#   ember remove  <pkg...>   remove packages and unused dependencies
-#   ember search  <pkg...>   search repos and the AUR
-#   ember clean              empty the caches
-#   ember list               lists installed packages
-
-# emb works as a shorthand (symlink it to ember)
-# Only the Ruby standard library is used
-
 require 'json'
 require 'net/http'
 require 'uri'
@@ -24,7 +11,7 @@ require 'set'
 require 'shellwords'
 
 module Ember
-  VERSION   = '2.8-1'
+  VERSION   = '2.9-1'
   CACHE     = File.join(ENV['XDG_CACHE_HOME'] || File.join(Dir.home, '.cache'), 'ember')
   PKG_DIR   = File.join(CACHE, 'pkg')    # built AUR packages
   BUILD_DIR = File.join(CACHE, 'build')  # AUR git clones + downloaded sources
@@ -367,9 +354,10 @@ module Ember
 
     attr_reader :aur, :repo_targets, :repo_runtime, :repo_build, :already, :missing
 
-    def initialize(targets, aur_only: false)
+    def initialize(targets, aur_only: false, force_aur: [])
       @targets = targets
       @aur_only = aur_only
+      @force_aur = force_aur
       @aur = {}
       @queue = []
       @repo_targets = []
@@ -387,6 +375,7 @@ module Ember
         else unknown << t
         end
       end
+      unknown = (unknown + @force_aur).uniq
 
       Aur.info(unknown).each { |i| add(i, explicit: true) }
       @missing = unknown.reject { |n| @aur.key?(n) }
@@ -605,12 +594,13 @@ module Ember
 
       cmd, *args = @rest
       case cmd
-      when nil, 'update', 'upgrade', '-Syu'             then upgrade
-      when 'install', 'ins', 'add', '-S'                then install(args)
+      when nil, 'update', 'upgrade'                     then upgrade
+      when /\A-S([yu]*)\z/                              then sync_cmd($1.include?('y'), $1.include?('u'), args)
+      when 'install', 'ins', 'add'                      then install(args)
       when 'local', '-U'                                then install_local(args)
       when 'remove', 'rm', 'uninstall', 'del', '-R'     then remove(args, purge: false)
       when 'purge'                                      then remove(args, purge: true)
-      when 'search', 's', 'find'                        then search(args)
+      when 'search', 'find'                             then search(args)
       when 'clean'                                      then clean
       when 'help'                                       then usage
       when 'version'                                    then puts("ember #{VERSION}")
@@ -639,11 +629,13 @@ module Ember
 
         #{UI.bold('Commands:')}
           #{UI.ember('(none)')}, update      Update the system and all AUR packages
-          #{UI.ember('install')}, ins        Install packages from the repos or the AUR
+          #{UI.ember('install')}, -S         Install packages from the repos or the AUR
+          #{UI.ember('-Sy')} [pkg…]          Refresh the databases, and install any given packages
+          #{UI.ember('-Syu')} [pkg…]         Refresh the databases, upgrade everything, and install any given packages
           #{UI.ember('local')}, -U           Install local package files (*.pkg.tar.*)
           #{UI.ember('remove')}, rm          Remove packages and unused dependencies
           #{UI.ember('purge')}               Like remove, but also drops config backups
-          #{UI.ember('search')}, s           Search the repos and the AUR
+          #{UI.ember('search')},             Search the repos and the AUR
           #{UI.ember('clean')}               Empty ember's cache (and pacman's)
           #{UI.ember('list')}                Creates a list of all installed packages
 
@@ -685,15 +677,36 @@ module Ember
     end
 
     # install 
+    def sync_cmd(refresh, upgrade_all, names)
+      if upgrade_all
+        upgrade(refresh: refresh, extra: names)
+      elsif refresh
+        auth!
+        sync_databases
+        names.empty? ? UI.ok('Done.') : install(names)
+      else
+        install(names)
+      end
+    end
+
+    def sync_databases
+      UI.step 'Refreshing package databases'
+      su('pacman', '-Sy') or raise Error, 'Could not refresh the package databases'
+    end
+
+    def check_planner(planner)
+      planner.already.each { |n| UI.note("#{UI.bold(n)} is already installed") }
+      return if planner.missing.empty?
+
+      raise Error, "Unable to locate #{planner.missing.size == 1 ? 'package' : 'packages'} " \
+                   "#{planner.missing.join(', ')} in the repos or the AUR"
+    end
+
     def install(names)
-      raise Error, 'Nothing to install. Usage: ember install <package…>' if names.empty?
+      raise Error, 'Nothing to install. Usage: ember -S <package…>' if names.empty?
 
       planner = UI.spin('Resolving dependencies') { Planner.new(names).resolve }
-      planner.already.each { |n| UI.note("#{UI.bold(n)} is already installed") }
-      unless planner.missing.empty?
-        raise Error, "Unable to locate #{planner.missing.size == 1 ? 'package' : 'packages'} " \
-                     "#{planner.missing.join(', ')} in the repos or the AUR"
-      end
+      check_planner(planner)
       transact(planner: planner)
     end
 
@@ -805,14 +818,14 @@ module Ember
     end
 
     # upgrade 
-    def upgrade
+    def upgrade(refresh: true, extra: [])
       auth!
-      UI.step 'Refreshing package databases'
-      su('pacman', '-Sy') or raise Error, 'Could not refresh the package databases'
+      sync_databases if refresh
 
       repo_up, resolved = UI.spin('Calculating upgrades') { repo_upgrades }
       aur_old = {}
-      planner = UI.spin('Checking the AUR') { aur_planner(aur_old) }
+      planner = UI.spin('Checking the AUR') { aur_planner(aur_old, extra) }
+      check_planner(planner)
 
       res = transact(planner: planner, repo_up: repo_up, resolved_up: resolved, aur_old: aur_old)
       return unless res == :aborted
@@ -834,15 +847,15 @@ module Ember
       [ups, (ups.keys + names).uniq]
     end
 
-    def aur_planner(aur_old)
+    def aur_planner(aur_old, extra = [])
       foreign = Sh.out('pacman', '-Qm').lines.map(&:split).select { |a| a.size == 2 }.to_h
       infos = Aur.info(foreign.keys)
       ups = infos.select { |i| Sh.out('vercmp', foreign[i['Name']], i['Version']).strip.to_i.negative? }
       ups.each { |i| aur_old[i['Name']] = foreign[i['Name']] }
-      Planner.new(ups.map { |i| i['Name'] }, aur_only: true).resolve
+      Planner.new(extra, force_aur: ups.map { |i| i['Name'] }).resolve
     rescue Error => e
       UI.warn("Skipping AUR: #{e.message}")
-      Planner.new([], aur_only: true).resolve
+      Planner.new(extra).resolve
     end
 
     def transact(planner:, repo_up: {}, resolved_up: [], aur_old: {})
