@@ -11,7 +11,7 @@ require 'set'
 require 'shellwords'
 
 module Ember
-  VERSION   = '2.9-1'
+  VERSION   = '3.0-1'
   CACHE     = File.join(ENV['XDG_CACHE_HOME'] || File.join(Dir.home, '.cache'), 'ember')
   PKG_DIR   = File.join(CACHE, 'pkg')    # built AUR packages
   BUILD_DIR = File.join(CACHE, 'build')  # AUR git clones + downloaded sources
@@ -1250,8 +1250,7 @@ module Ember
     def remove(names, purge:)
       raise Error, "Nothing to remove. Usage: ember #{purge ? 'purge' : 'remove'} <package…>" if names.empty?
 
-      flags = purge ? '-Rnsp' : '-Rsp'
-      out, ok, err = Sh.capture('pacman', flags, '--print-format', '%n', *names)
+      out, ok, err = Sh.capture('pacman', '-Rsp', '--print-format', '%n', *names)
       raise Error, Sh.clean_errors(err) unless ok
 
       all = out.lines.map(&:strip).reject(&:empty?)
